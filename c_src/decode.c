@@ -8,337 +8,142 @@
 #include "yajl/yajl_parser.h"
 #include "yajl/yajl_lex.h"
 
-#define MAX_DEPTH       2048
-#define OK              1
-#define ERROR           0
+typedef struct {
+    ERL_NIF_TERM head;
+    ErlNifEnv* env;
+} decode_ctx;
 
-#define WHERE \
-    (fprintf(stderr, "(%s)%d:%s\r\n", __FILE__, __LINE__, __FUNCTION__))
+#define ENV(ctxarg) (((decode_ctx*)ctxarg)->env)
 
-// LIFO stack instead of lists:reverse/1
-#define OBJ_SLAB_SIZE   512
-typedef struct _obj
+#define CONTINUE 1
+#define CANCEL 0
+
+
+static void
+add_to_head(void* vctx, ERL_NIF_TERM newhead)
 {
-    ERL_NIF_TERM    key;
-    ERL_NIF_TERM    slab[OBJ_SLAB_SIZE];
-    short           used;
-    struct _obj*    next;
-} Object; // Map or Array
-
-// Depth stack to handle nested objects
-typedef struct
-{
-    ErlNifEnv*      env;
-    ERL_NIF_TERM    error;
-    ERL_NIF_TERM    val;
-    Object*         stack[MAX_DEPTH];
-    int             depth;
-} Decoder;
-
-void
-init_decoder(Decoder* dec, ErlNifEnv* env)
-{
-    dec->env = env;
-    dec->val = 0;
-    dec->depth = -1;
-    memset(dec->stack, '\0', sizeof(ERL_NIF_TERM) * MAX_DEPTH);
-}
-
-void
-destroy_decoder(Decoder* dec, ErlNifEnv* env)
-{
-    Object* obj = NULL;
-    while(dec->depth >= 0)
-    {
-        while(dec->stack[dec->depth] != NULL)
-        {
-            obj = dec->stack[dec->depth];
-            dec->stack[dec->depth] = obj->next;
-            enif_free_compat(dec->env, obj);
-        }
-        dec->depth--;
-    }
-}
-
-const char* LEX_ERRORS[] =
-{
-    "ok",
-    "invalid_utf8",
-    "invalid_escaped_char",
-    "invalid_json_char",
-    "invalid_hex_char",
-    "invalid_char",
-    "invalid_string",
-    "missing_integer_after_decimal",
-    "missing_integer_after_exponent",
-    "missing_integer_after_minus",
-    "unallowed_comment"
-};
-
-const char* PARSE_ERRORS[] =
-{
-    "ok",
-    "client_cancelled",
-    "integer_overflow",
-    "numeric_overflow",
-    "invalid_token",
-    "internal_invalid_token",
-    "key_must_be_string",
-    "pair_missing_colon",
-    "bad_token_after_map_value",
-    "bad_token_after_array_value"
-};
-
-ERL_NIF_TERM
-make_error(yajl_handle handle, ErlNifEnv* env)
-{
-    ERL_NIF_TERM atom;
-    
-    yajl_parser_error pe = handle->parserError;
-    yajl_lex_error le = yajl_lex_get_error(handle->lexer);
-
-    if(le != yajl_lex_e_ok)
-    {
-        atom = enif_make_atom(env, LEX_ERRORS[le]);
-    }
-    else if(pe != yajl_parser_e_ok)
-    {
-        atom = enif_make_atom(env, PARSE_ERRORS[pe]);
-    }
-    else
-    {
-        atom = enif_make_atom(env, "unknown");
-    }
-
-    return enif_make_tuple(env, 2,
-        enif_make_atom(env, "error"),
-        enif_make_tuple(env, 2,
-            enif_make_uint(env, handle->bytesConsumed),
-            atom
-        )
-    );
-}
-
-static inline int
-push_value(Decoder* dec, ERL_NIF_TERM val)
-{
-    Object* obj = NULL;
-    Object* new = NULL;
-
-    // Single value parsed
-    if(dec->depth < 0)
-    {
-        if(dec->val != 0) return ERROR;
-        dec->val = val;
-        return OK;
-    }
-    
-    assert(dec->stack[dec->depth] != NULL);
-    obj = dec->stack[dec->depth];
-
-    if(obj->key != 0)
-    {
-        val = enif_make_tuple(dec->env, 2, obj->key, val);
-        obj->key = 0;
-    }
-
-    // Room left in object slab
-    if(obj->used < OBJ_SLAB_SIZE)
-    {
-        obj->slab[obj->used++] = val;
-        return OK;
-    }
-    
-    // New object slab required
-    new = (Object*) enif_alloc_compat(dec->env, sizeof(Object));
-    if(new == NULL)
-    {
-        dec->error = enif_make_atom(dec->env, "memory_error");
-        return ERROR;
-    }
-    memset(new, '\0', sizeof(Object));
-    new->key = 0;
-    new->slab[0] = val;
-    new->used = 1;
-    new->next = obj;
-    dec->stack[++dec->depth] = new;
-    
-    return OK;
-}
-
-static inline int
-pop_object(Decoder* dec, ERL_NIF_TERM* val)
-{
-    Object* curr = NULL;
-    ERL_NIF_TERM ret = enif_make_list(dec->env, 0);
-
-    if(dec->depth < 0)
-    {
-        dec->error = enif_make_atom(dec->env, "invalid_internal_depth");
-        return ERROR;
-    }
-    if(dec->stack[dec->depth]->used > OBJ_SLAB_SIZE)
-    {
-        dec->error = enif_make_atom(dec->env, "invalid_internal_slab_use");
-        return ERROR;
-    }
-    
-    while(dec->stack[dec->depth] != NULL)
-    {
-        curr = dec->stack[dec->depth];
-        while(curr->used > 0)
-        {
-            ret = enif_make_list_cell(dec->env, curr->slab[--curr->used], ret);
-        }
-        dec->stack[dec->depth] = curr->next;
-        enif_free_compat(dec->env, curr);
-    }
-
-    dec->depth--;
-    *val = ret;
-    return OK;
+    decode_ctx* ctx = (decode_ctx*)vctx;
+    ctx->head = enif_make_list_cell(ctx->env, newhead, ctx->head);
 }
 
 static int
 decode_null(void* ctx)
 {
-    Decoder* dec = (Decoder*) ctx;
-    return push_value(dec, enif_make_atom(dec->env, "null"));
+    add_to_head(ctx, enif_make_atom(ENV(ctx), "null"));
+    return CONTINUE;
 }
 
 static int
 decode_boolean(void* ctx, int val)
 {
-    Decoder* dec = (Decoder*) ctx;
-    if(val)
-    {
-        return push_value(dec, enif_make_atom(dec->env, "true"));
-    }
-    else
-    {
-        return push_value(dec, enif_make_atom(dec->env, "false"));
-    }
-
-    return OK;
+    add_to_head(ctx, enif_make_atom(ENV(ctx), val ? "true" : "false"));
+    return CONTINUE;
 }
 
 static int
-decode_integer(void* ctx, long val)
+decode_number(void * ctx, const char * numberVal, unsigned int numberLen)
 {
-    Decoder* dec = (Decoder*) ctx;
-    return push_value(dec, enif_make_long(dec->env, val));
+    // scan in the input to see if it's a float or int
+    
+    int numberType = 0; // 0 means integer, 1 means float
+    unsigned int i;
+    ErlNifBinary bin; 
+    
+    for(i=0; i<numberLen; i++) {
+        switch (numberVal[i]) {
+        case '.':
+        case 'E':
+        case 'e':
+            numberType = 1; // it's  a float
+            goto loopend;
+        }
+    }
+loopend:
+    if(!enif_alloc_binary_compat(ENV(ctx), numberLen, &bin))
+    {
+       return CANCEL;
+    }
+    memcpy(bin.data, numberVal, numberLen);
+    add_to_head(ctx, enif_make_tuple(ENV(ctx), 2,
+                        enif_make_int(ENV(ctx), numberType),
+                        enif_make_binary(ENV(ctx), &bin)));
+    return CONTINUE;
 }
 
-static int
-decode_double(void* ctx, double val)
-{
-    Decoder* dec = (Decoder*) ctx;
-    return push_value(dec, enif_make_double(dec->env, val));
-}
+
 
 static int
 decode_string(void* ctx, const unsigned char* data, unsigned int size)
 {
     ErlNifBinary bin;
-    Decoder* dec = (Decoder*) ctx;
-    if(!enif_alloc_binary_compat(dec->env, size, &bin))
+    if(!enif_alloc_binary_compat(ENV(ctx), size, &bin))
     {
-        dec->error = enif_make_atom(dec->env, "memory_error");
-        return ERROR;
+        return CANCEL;
     }
     memcpy(bin.data, data, size);
-    return push_value(dec, enif_make_binary(dec->env, &bin));
+    add_to_head(ctx, enif_make_binary(ENV(ctx), &bin));
+    return CONTINUE;
 }
 
 static int
-decode_start_obj(void* ctx)
+decode_start_array(void* ctx)
 {
-    Object* obj = NULL;
-    Decoder* dec = (Decoder*) ctx;
-    
-    if(dec->depth+1 < 0)
-    {
-        dec->error = enif_make_atom(dec->env, "invalid_internal_depth");
-        return ERROR;           
-    }
-    if(dec->depth+1 >= MAX_DEPTH)
-    {
-        dec->error = enif_make_atom(dec->env, "max_depth_exceeded");
-        return ERROR;   
-    }
-    dec->depth++;
-    
-    obj = (Object*) enif_alloc_compat(dec->env, sizeof(Object));
-    if(obj == NULL)
-    {
-        dec->error = enif_make_atom(dec->env, "memory_error");
-        return ERROR;
-    }
-    memset(obj, '\0', sizeof(Object));
-    obj->key = 0;
-    obj->used = 0;
-    obj->next = NULL;
-    dec->stack[dec->depth] = obj;
-    
-    return OK;
+    add_to_head(ctx, enif_make_int(ENV(ctx), 0));
+    return CONTINUE;
 }
+
+
+static int
+decode_end_array(void* ctx)
+{
+    add_to_head(ctx, enif_make_int(ENV(ctx), 1));
+    return CONTINUE;
+}
+
+
+static int
+decode_start_map(void* ctx)
+{
+    add_to_head(ctx, enif_make_int(ENV(ctx), 2));
+    return CONTINUE;
+}
+
+
+static int
+decode_end_map(void* ctx)
+{
+    add_to_head(ctx, enif_make_int(ENV(ctx), 3));
+    return CONTINUE;
+}
+
 
 static int
 decode_map_key(void* ctx, const unsigned char* data, unsigned int size)
 {
     ErlNifBinary bin;
-    Decoder* dec = (Decoder*) ctx;
-    if(dec->stack[dec->depth] < 0)
+    if(!enif_alloc_binary_compat(ENV(ctx), size, &bin))
     {
-        dec->error = enif_make_atom(dec->env, "invalid_internal_map_key_depth");
-        return ERROR;
-    }
-    if(dec->stack[dec->depth]->key != 0)
-    {
-        dec->error = enif_make_atom(dec->env, "invalid_internal_no_key_set");
-        return ERROR;
-    }
-    if(!enif_alloc_binary_compat(dec->env, size, &bin))
-    {
-        dec->error = enif_make_atom(dec->env, "memory_error");
-        return ERROR;
+       return CANCEL;
     }
     memcpy(bin.data, data, size);
-    dec->stack[dec->depth]->key = enif_make_binary(dec->env, &bin);
-    return OK;
-}
-
-static int
-decode_end_map(void* ctx)
-{
-    ERL_NIF_TERM val;
-    Decoder* dec = (Decoder*) ctx;
-    if(!pop_object(dec, &val)) return ERROR;
-    val = enif_make_tuple(dec->env, 1, val);
-    return push_value(dec, val);
-}
-
-static int
-decode_end_array(void* ctx)
-{
-    ERL_NIF_TERM val;
-    Decoder* dec = (Decoder*) ctx;
-    if(!pop_object(dec, &val)) return ERROR;
-    return push_value(dec, val);
+    add_to_head(ctx, enif_make_tuple(ENV(ctx), 2,
+                        enif_make_int(ENV(ctx), 3),
+                        enif_make_binary(ENV(ctx), &bin)));
+    return CONTINUE;
 }
 
 static yajl_callbacks
 decoder_callbacks = {
     decode_null,
     decode_boolean,
-    decode_integer,
-    decode_double,
     NULL,
+    NULL,
+    decode_number,
     decode_string,
-    decode_start_obj,
+    decode_start_map,
     decode_map_key,
     decode_end_map,
-    decode_start_obj,
+    decode_start_array,
     decode_end_array
 };
 
@@ -356,50 +161,36 @@ check_rest(unsigned char* data, unsigned int size, unsigned int used)
             case '\n':
                 continue;
             default:
-                return ERROR;
+                return CANCEL;
         }
     }
     
-    return OK;
+    return CONTINUE;
 }
 
 ERL_NIF_TERM
-decode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-    Decoder dec;
+    decode_ctx ctx;
     yajl_parser_config conf = {0, 1}; // No comments, check utf8
-    yajl_handle handle = yajl_alloc(&decoder_callbacks, &conf, NULL, &dec);
+    yajl_handle handle = yajl_alloc(&decoder_callbacks, &conf, NULL, &ctx);
     yajl_status status;
     unsigned int used;
     ErlNifBinary bin;
     ERL_NIF_TERM ret;
     
-    if(handle == NULL)
-    {
-        ret = enif_make_tuple(env, 2,
-            enif_make_atom(env, "error"),
-            enif_make_atom(env, "memory_error")
-        );
-        goto done;
-    }
-
-    if(argc != 1)
-    {
-        ret = enif_make_badarg(env);
-        goto done;
-    }
-
+    ctx.env = env;
+    ctx.head = enif_make_list_from_array(env, NULL, 0);
+    
     if(!enif_inspect_iolist_as_binary(env, argv[0], &bin))
     {
         ret = enif_make_badarg(env);
         goto done;
     }
-    
-    init_decoder(&dec, env);
+
     status = yajl_parse(handle, bin.data, bin.size);
     used = handle->bytesConsumed;
-    destroy_decoder(&dec, env);
-
+    
     // Parsing something like "2.0" (without quotes) will
     // cause a spurious semi-error. We add the extra size
     // check so that "2008-20-10" doesn't pass.
@@ -410,7 +201,7 @@ decode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
     if(status == yajl_status_ok && used != bin.size)
     {
-        if(check_rest(bin.data, bin.size, used) != OK)
+        if(check_rest(bin.data, bin.size, used) == CANCEL)
         {
             ret = enif_make_tuple(env, 2,
                 enif_make_atom(env, "error"),
@@ -423,11 +214,24 @@ decode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     switch(status)
     {
         case yajl_status_ok:
-            ret = enif_make_tuple(env, 2, enif_make_atom(env, "ok"), dec.val);
+            ret = enif_make_tuple(env, 2, enif_make_atom(env, "ok"), ctx.head);
             goto done;
 
         case yajl_status_error:
-            ret = make_error(handle, env);
+            {
+            char* unknownError = "Unknown Parse Error";
+            char* yajlError = (char*)yajl_get_error(handle, 0, NULL, 0);
+            if (!yajlError) { /* can't alloc the error! */
+                yajlError = unknownError;
+            }
+            ret = enif_make_tuple(env, 2,
+                enif_make_atom(env, "error"),
+                enif_make_string(env, yajlError, ERL_NIF_LATIN1));
+            
+            if (yajlError != unknownError) {
+                yajl_free_error(handle, (unsigned char*)yajlError);
+            }
+            }
             goto done;
 
         case yajl_status_insufficient_data:
@@ -438,12 +242,10 @@ decode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             goto done;
 
         case yajl_status_client_canceled:
+        /* the only time we do this is when we can't allocate a binary. */
             ret = enif_make_tuple(env, 2,
                 enif_make_atom(env, "error"),
-                enif_make_tuple(env, 2,
-                    enif_make_uint(env, handle->bytesConsumed),
-                    dec.error
-                )
+                enif_make_atom(env, "insufficient memory")
             );
             goto done;
 
