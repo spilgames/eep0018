@@ -245,7 +245,7 @@ reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         /* the only time we do this is when we can't allocate a binary. */
             ret = enif_make_tuple(env, 2,
                 enif_make_atom(env, "error"),
-                enif_make_atom(env, "insufficient memory")
+                enif_make_atom(env, "insufficient_memory")
             );
             goto done;
 

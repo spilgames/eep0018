@@ -1,6 +1,6 @@
 #include "erl_nif.h"
 
-ERL_NIF_TERM encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+ERL_NIF_TERM encode_string(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 ERL_NIF_TERM reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 
 int
@@ -23,7 +23,7 @@ on_upgrade(ErlNifEnv* env, void** priv_data, void** old_data, ERL_NIF_TERM info)
 
 static ErlNifFunc nif_funcs[] =
 {
-    {"encode", 1, encode},
+    {"encode_string", 1, encode_string},
     {"reverse_tokens", 1, reverse_tokens}
 };
 

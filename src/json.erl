@@ -26,7 +26,48 @@ decode(IoList) ->
     end.
 
 
-encode(_) ->
+
+encode(true) ->
+    <<"true">>;
+encode(false) ->
+    <<"false">>;
+encode(null) ->
+    <<"null">>;
+encode(I) when is_integer(I) ->
+    integer_to_list(I);
+encode(F) when is_float(F) ->
+    io_lib:format("~p",[F]);
+encode(S) when is_binary(S); is_atom(S) ->
+    encode_string(S);
+encode({Props}) when is_list(Props) ->
+    encode_proplist(Props);
+encode(Array) when is_list(Array) ->
+    encode_array(Array);
+encode(Bad) ->
+    exit({encode, {bad_term, Bad}}).
+
+encode_array([]) ->
+    <<"[]">>;
+encode_array(L) ->
+    F = fun (O, Acc) ->
+                [$,, encode(O) | Acc]
+        end,
+    [$, | Acc1] = lists:foldl(F, "[", L),
+    lists:reverse([$\] | Acc1]).
+
+encode_proplist([]) ->
+    <<"{}">>;
+encode_proplist(Props) ->
+    F = fun ({K, V}, Acc) ->
+                KS = encode_string(K),
+                VS = encode(V),
+                [$,, VS, $:, KS | Acc]
+        end,
+    [$, | Acc1] = lists:foldl(F, "{", Props),
+    lists:reverse([$\} | Acc1]).
+
+
+encode_string(_) ->
     not_loaded(?LINE).
 
 
