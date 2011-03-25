@@ -36,7 +36,7 @@ encode(null) ->
 encode(I) when is_integer(I) ->
     integer_to_list(I);
 encode(F) when is_float(F) ->
-    io_lib:format("~p",[F]);
+    encode_double(F);
 encode(S) when is_binary(S); is_atom(S) ->
     encode_string(S);
 encode({Props}) when is_list(Props) ->
@@ -68,6 +68,10 @@ encode_proplist(Props) ->
 
 
 encode_string(_) ->
+    not_loaded(?LINE).
+
+
+encode_double(_) ->
     not_loaded(?LINE).
 
 
