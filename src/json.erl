@@ -20,59 +20,61 @@ decode(IoList) ->
     case reverse_tokens(IoList) of
     {ok, ReverseTokens} ->
         [[EJson]] = make_ejson(ReverseTokens, [[]]),
-        EJson;
+        {ok, EJson};
     Error ->
         Error
     end.
 
 
+encode(EJson) ->
+    try
+        RevList = encode_rev(EJson),
+        final_encode(lists:flatten(RevList))
+    catch throw:Error ->
+        Error
+    end.
 
-encode(true) ->
+% Encode the json into a reverse list that's almost an iolist
+% everything in the list is the final output except for tuples with
+% {0, Strings} and {1, Floats}, which are to be converted to strings
+% inside the NIF. The Nif also reverses the output, producing the final
+% iolist.
+encode_rev(true) ->
     <<"true">>;
-encode(false) ->
+encode_rev(false) ->
     <<"false">>;
-encode(null) ->
+encode_rev(null) ->
     <<"null">>;
-encode(I) when is_integer(I) ->
+encode_rev(I) when is_integer(I) ->
     integer_to_list(I);
-encode(F) when is_float(F) ->
-    encode_double(F);
-encode(S) when is_binary(S); is_atom(S) ->
-    encode_string(S);
-encode({Props}) when is_list(Props) ->
-    encode_proplist(Props);
-encode(Array) when is_list(Array) ->
-    encode_array(Array);
-encode(Bad) ->
-    exit({encode, {bad_term, Bad}}).
-
-encode_array([]) ->
-    <<"[]">>;
-encode_array(L) ->
-    F = fun (O, Acc) ->
-                [$,, encode(O) | Acc]
-        end,
-    [$, | Acc1] = lists:foldl(F, "[", L),
-    lists:reverse([$\] | Acc1]).
-
-encode_proplist([]) ->
-    <<"{}">>;
-encode_proplist(Props) ->
-    F = fun ({K, V}, Acc) ->
-                KS = encode_string(K),
-                VS = encode(V),
-                [$,, VS, $:, KS | Acc]
-        end,
-    [$, | Acc1] = lists:foldl(F, "{", Props),
-    lists:reverse([$\} | Acc1]).
+encode_rev(S) when is_binary(S) ->
+    {0, S};
+encode_rev(F) when is_float(F) ->
+    {1, F};
+encode_rev({Props}) when is_list(Props) ->
+    encode_proplist_rev(Props, [<<"{">>]);
+encode_rev(Array) when is_list(Array) ->
+    encode_array_rev(Array, [<<"[">>]);
+encode_rev(Bad) ->
+    throw({encode, {bad_term, Bad}}).
 
 
-encode_string(_) ->
-    not_loaded(?LINE).
+encode_array_rev([], Acc) ->
+    [<<"]">> | Acc];
+encode_array_rev([Val | Rest], [<<"[">>]) ->
+    encode_array_rev(Rest, [encode_rev(Val), <<"[">>]);
+encode_array_rev([Val | Rest], Acc) ->
+    encode_array_rev(Rest, [encode_rev(Val), <<",">> | Acc]).
 
 
-encode_double(_) ->
-    not_loaded(?LINE).
+encode_proplist_rev([], Acc) ->
+    [<<"}">> | Acc];
+encode_proplist_rev([{Key,Val} | Rest], [<<"{">>]) ->
+    encode_proplist_rev(Rest, [{0, Key}, <<":">>, encode_rev(Val), <<"{">>]);
+encode_proplist_rev([{Key,Val} | Rest], Acc) ->
+    encode_proplist_rev(Rest, [{0, Key}, <<":">>, encode_rev(Val), <<",">> | Acc]).
+
+
 
 
 make_ejson([], Stack) ->
@@ -108,6 +110,9 @@ fuzz(Chooser) ->
 
 not_loaded(Line) ->
     exit({json_not_loaded, module, ?MODULE, line, Line}).
-    
+
 reverse_tokens(_) ->
+    not_loaded(?LINE).
+
+final_encode(_) ->
     not_loaded(?LINE).
