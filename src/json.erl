@@ -29,7 +29,7 @@ decode(IoList) ->
 encode(EJson) ->
     try
         RevList = encode_rev(EJson),
-        final_encode(lists:flatten(RevList))
+        final_encode(lists:flatten([RevList]))
     catch throw:Error ->
         Error
     end.
@@ -46,7 +46,7 @@ encode_rev(false) ->
 encode_rev(null) ->
     <<"null">>;
 encode_rev(I) when is_integer(I) ->
-    integer_to_list(I);
+    list_to_binary(integer_to_list(I));
 encode_rev(S) when is_binary(S) ->
     {0, S};
 encode_rev(F) when is_float(F) ->
