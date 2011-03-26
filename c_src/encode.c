@@ -16,69 +16,86 @@ typedef struct {
 } encode_ctx;
 
 
+static int
+ensure_buffer(void* vctx, unsigned int len) {
+    encode_ctx* ctx = (encode_ctx*)vctx;
+    if ((ctx->bin.size - ctx->fill_offset) < len) {
+        if(!enif_realloc_binary(&(ctx->bin), (ctx->bin.size * 2) + len)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void
-fill_buffer(void* vctx,
-                             const char* str,
-                             unsigned int len)
+fill_buffer(void* vctx, const char* str, unsigned int len)
 {
     encode_ctx* ctx = (encode_ctx*)vctx;
     if (ctx->fatal_error) return;
-    if ((ctx->bin.size - ctx->fill_offset) < len) {
-        if(!enif_realloc_binary(&(ctx->bin), (ctx->bin.size * 2) + len)) {
-            ctx->fatal_error = 1;
-            return;
-        }
+    
+    if (!ensure_buffer(vctx, len)) {
+        ctx->fatal_error = 1;
     }
     memcpy(ctx->bin.data + ctx->fill_offset, str, len);
     ctx->fill_offset += len;
 }
 
-
+/* Json encode the string binary into the ctx.bin,
+  with surrounding quotes and all */
 static int
-encode_string(ErlNifEnv* env, ERL_NIF_TERM binary, ERL_NIF_TERM *pterm)
+encode_string(void* vctx, ERL_NIF_TERM binary)
 {
-    encode_ctx ctx;
+    encode_ctx* ctx = (encode_ctx*)vctx;
     ErlNifBinary bin;
     
-    if(!enif_inspect_binary(env, binary, &bin))
-    {
+    if(!enif_inspect_binary(ctx->env, binary, &bin)) {
         return 0;
     }
-    if (!enif_alloc_binary(bin.size + 2, &(ctx.bin)))
-    {
+    fill_buffer(ctx, "\"", 1);
+    if (ctx->fatal_error) {
         return 0;
     }
-    ctx.env = env;
-    ctx.fill_offset = 0;
-    ctx.fatal_error = 0;
-    fill_buffer(&ctx, "\"", 1);
-    yajl_string_encode2(fill_buffer, &ctx, bin.data, bin.size);
-    fill_buffer(&ctx, "\"", 1);
+    yajl_string_encode2(fill_buffer, ctx, bin.data, bin.size);
+    fill_buffer(ctx, "\"", 1);
     
-    if (ctx.fatal_error) {
+    if (ctx->fatal_error) {
         return 0;
     }
-     /* size might be bigger than the fill offset,
-     make smaller to truncate the garbage. */
-    ctx.bin.size = ctx.fill_offset;
-    *pterm = enif_make_binary(env, &ctx.bin);
     return 1;
+}
+
+static ERL_NIF_TERM
+no_mem_error(ErlNifEnv* env)
+{
+    return enif_make_tuple(env, 2,
+            enif_make_atom(env, "error"),
+            enif_make_atom(env, "insufficient_memory"));
 }
 
 ERL_NIF_TERM
 final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-#define BADARG ret = enif_make_badarg(env); goto done;
-
-    ERL_NIF_TERM ret = enif_make_list_from_array(env, NULL, 0);
     ERL_NIF_TERM head = argv[0];
     ERL_NIF_TERM term;
+
     double number;
-    char buffer[32];
+    
+    encode_ctx ctx;
+    ctx.env = env;
+    ctx.fill_offset = 0;
+    ctx.fatal_error = 0;
+    
+    if (!enif_alloc_binary(100, &ctx.bin)) { 
+            return no_mem_error(env);
+    }
+    
     while(enif_get_list_cell(env, head, &term, &head)) {
-        //We scan the list, looking for things to encode. Most items we
-        // output untouched, but tuples we be tagged with a type and a 
-        //value: {Type, Value} where Type is a an Integer.
+        ErlNifBinary termbin;
+        
+        // We scan the list, looking for things to write into the binary, or
+        // encode and then write into the binary. We encode values that are
+        // tuples tagged with a type and a value: {Type, Value} where Type
+        // is a an Integer and Value is what is to be encoded
         
         if (enif_is_tuple(env, term)) {
             // It's a tuple.
@@ -86,36 +103,50 @@ final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             int arity;
             int code;
             if (!enif_get_tuple(env, term, &arity, &array)) {
-                ret =  enif_make_tuple(env, 2,
-                    enif_make_atom(env, "error"),
-                    enif_make_atom(env, "invalid_number")
-                );
+                return enif_make_badarg(env);
             }
             if (arity != 2 || !enif_get_int(env, array[0], &code)) {
-                BADARG;
+                return enif_make_badarg(env);
             }
             if (code == 0) {
                 // {0, String}
-                if (!encode_string(env, array[1], &term)) {
-                    BADARG;
+                if (!encode_string(&ctx, array[1])) {
+                    return no_mem_error(env);
                 }
             }
             else {
                 // {1, Double}
                 if(!enif_get_double(env, array[1], &number)) {
-                    BADARG;
+                    return enif_make_badarg(env);
                 }
                 if (isnan(number) || isinf(number)) {
-                    BADARG;
+                    return enif_make_badarg(env);
                 }
-                snprintf(buffer, sizeof(buffer), "%.16g", number);
-                term = enif_make_string(env, buffer, ERL_NIF_LATIN1);
+                if (!ensure_buffer(&ctx, 32)) {
+                    return no_mem_error(env);
+                }
+                // write the string into the buffer
+                snprintf((char*)ctx.bin.data+ctx.fill_offset, 32,
+                        "%.16g", number);
+                // increment the length
+                ctx.fill_offset += strlen((char*)ctx.bin.data+ctx.fill_offset);
+            }
+            
+        } else if (enif_inspect_binary(env, term, &termbin)) {    
+            fill_buffer(&ctx, (char*)termbin.data, termbin.size);
+            if (ctx.fatal_error) {
+                return no_mem_error(env);
             }
         }
-        // Now encode the term into a new list head
-        ret = enif_make_list_cell(env, term, ret);
+        else {
+            //not a binary, not a tuple, wtf!
+            return enif_make_badarg(env);
+        }
     }
-done:
-    return ret;
+    if(!enif_realloc_binary(&(ctx.bin), ctx.fill_offset)) {
+        return no_mem_error(env);
+    }
+    
+    return enif_make_binary(env, &ctx.bin);
 }
 
