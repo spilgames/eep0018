@@ -6,13 +6,16 @@
 #include "erl_nif_compat.h"
 #include "yajl/yajl_encode.h"
 
+#define SUCCESS 0
+#define NOMEM 1
+#define BADARG 2
 
 
 typedef struct {
     ErlNifEnv* env;
     ErlNifBinary bin;
     size_t fill_offset;
-    int fatal_error;
+    int error;
 } encode_ctx;
 
 
@@ -21,20 +24,19 @@ ensure_buffer(void* vctx, unsigned int len) {
     encode_ctx* ctx = (encode_ctx*)vctx;
     if ((ctx->bin.size - ctx->fill_offset) < len) {
         if(!enif_realloc_binary(&(ctx->bin), (ctx->bin.size * 2) + len)) {
-            return 0;
+            return NOMEM;
         }
     }
-    return 1;
+    return SUCCESS;
 }
 
 static void
 fill_buffer(void* vctx, const char* str, unsigned int len)
 {
     encode_ctx* ctx = (encode_ctx*)vctx;
-    if (ctx->fatal_error) return;
     
-    if (!ensure_buffer(vctx, len)) {
-        ctx->fatal_error = 1;
+    if (ctx->error || (ctx->error = ensure_buffer(vctx, len))) {
+        return;
     }
     memcpy(ctx->bin.data + ctx->fill_offset, str, len);
     ctx->fill_offset += len;
@@ -49,19 +51,16 @@ encode_string(void* vctx, ERL_NIF_TERM binary)
     ErlNifBinary bin;
     
     if(!enif_inspect_binary(ctx->env, binary, &bin)) {
-        return 0;
+        return NOMEM;
     }
     fill_buffer(ctx, "\"", 1);
-    if (ctx->fatal_error) {
-        return 0;
+    if (ctx->error) {
+        return ctx->error;
     }
     yajl_string_encode2(fill_buffer, ctx, bin.data, bin.size);
     fill_buffer(ctx, "\"", 1);
     
-    if (ctx->fatal_error) {
-        return 0;
-    }
-    return 1;
+    return ctx->error;
 }
 
 static ERL_NIF_TERM
@@ -83,7 +82,7 @@ final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     encode_ctx ctx;
     ctx.env = env;
     ctx.fill_offset = 0;
-    ctx.fatal_error = 0;
+    ctx.error = 0;
     
     if (!enif_alloc_binary(100, &ctx.bin)) { 
             return no_mem_error(env);
@@ -98,32 +97,39 @@ final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         // is a an Integer and Value is what is to be encoded
         
         if (enif_is_tuple(env, term)) {
-            // It's a tuple.
+            // It's a tuple to encode and copy
             const ERL_NIF_TERM* array;
             int arity;
             int code;
             if (!enif_get_tuple(env, term, &arity, &array)) {
-                return enif_make_badarg(env);
+                // shouldn't be possible to get here.
+                ctx.error = BADARG;
+                goto done;
             }
             if (arity != 2 || !enif_get_int(env, array[0], &code)) {
-                return enif_make_badarg(env);
+                // not arity 2 or the first element isn't an int
+                ctx.error = BADARG;
+                goto done;
             }
             if (code == 0) {
                 // {0, String}
-                if (!encode_string(&ctx, array[1])) {
-                    return no_mem_error(env);
+                if (encode_string(&ctx, array[1]) != SUCCESS) {
+                    goto done;
                 }
             }
             else {
                 // {1, Double}
                 if(!enif_get_double(env, array[1], &number)) {
-                    return enif_make_badarg(env);
+                    ctx.error = BADARG;
+                    goto done;
                 }
+                // We can't encode these.
                 if (isnan(number) || isinf(number)) {
-                    return enif_make_badarg(env);
+                    ctx.error = BADARG;
+                    goto done;
                 }
-                if (!ensure_buffer(&ctx, 32)) {
-                    return no_mem_error(env);
+                if ((ctx.error = ensure_buffer(&ctx, 32)) != SUCCESS) {
+                    goto done;
                 }
                 // write the string into the buffer
                 snprintf((char*)ctx.bin.data+ctx.fill_offset, 32,
@@ -132,21 +138,34 @@ final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                 ctx.fill_offset += strlen((char*)ctx.bin.data+ctx.fill_offset);
             }
             
-        } else if (enif_inspect_binary(env, term, &termbin)) {    
+        } else if (enif_inspect_binary(env, term, &termbin)) {
+            // this is a regular binary, copy the contents into the buffer
             fill_buffer(&ctx, (char*)termbin.data, termbin.size);
-            if (ctx.fatal_error) {
-                return no_mem_error(env);
+            if (ctx.error) {
+                goto done;
             }
         }
         else {
             //not a binary, not a tuple, wtf!
-            return enif_make_badarg(env);
+            ctx.error = BADARG;
+            goto done;
         }
     }
-    if(!enif_realloc_binary(&(ctx.bin), ctx.fill_offset)) {
+done:
+    if (ctx.error == NOMEM) {
+        enif_release_binary(&ctx.bin);
         return no_mem_error(env);
+    } else if (ctx.error == BADARG) {
+        enif_release_binary(&ctx.bin);
+        return enif_make_badarg(env);
     }
     
+    // Resize the binary to our exact final size
+    if(!enif_realloc_binary(&(ctx.bin), ctx.fill_offset)) {
+        enif_release_binary(&ctx.bin);
+        return no_mem_error(env);
+    }
+    // make the binary term which transfers ownership
     return enif_make_binary(env, &ctx.bin);
 }
 
