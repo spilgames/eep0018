@@ -84,7 +84,7 @@ final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     ctx.fill_offset = 0;
     ctx.error = 0;
     
-    if (!enif_alloc_binary(100, &ctx.bin)) { 
+    if (!enif_alloc_binary(100, &ctx.bin)) {
             return no_mem_error(env);
     }
     
