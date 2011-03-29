@@ -108,22 +108,42 @@ decode_number(void * ctx, const char * numberVal, unsigned int numberLen)
     int numberType = 0; // 0 means integer, 1 means float
     unsigned int i;
     ErlNifBinary bin; 
+    int missingDot = 1;
+    unsigned int expPos;
     
     for(i=0; i<numberLen; i++) {
         switch (numberVal[i]) {
         case '.':
+            missingDot = 0;
+            numberType = 1; // it's  a float
+            goto loopend;
         case 'E':
         case 'e':
+            expPos = i;
             numberType = 1; // it's  a float
             goto loopend;
         }
     }
 loopend:
-    if(!enif_alloc_binary_compat(ENV(ctx), numberLen, &bin))
+    if ((numberType == 1) && missingDot)
     {
-       return CANCEL;
+        if(!enif_alloc_binary_compat(ENV(ctx), numberLen + 2, &bin))
+        {
+            return CANCEL;
+        }
+        memcpy(bin.data, numberVal, expPos);
+        bin.data[expPos] = '.';
+        bin.data[expPos + 1] = '0';
+        memcpy(bin.data + expPos + 2, numberVal + expPos, numberLen - expPos);
     }
-    memcpy(bin.data, numberVal, numberLen);
+    else
+    {
+        if(!enif_alloc_binary_compat(ENV(ctx), numberLen, &bin))
+        {
+            return CANCEL;
+        }
+        memcpy(bin.data, numberVal, numberLen);
+    }
     add_to_head(ctx, enif_make_tuple(ENV(ctx), 2,
                         enif_make_int(ENV(ctx), numberType),
                         enif_make_binary(ENV(ctx), &bin)));
