@@ -69,9 +69,9 @@ encode_array_rev([Val | Rest], Acc) ->
 encode_proplist_rev([], Acc) ->
     [<<"}">> | Acc];
 encode_proplist_rev([{Key,Val} | Rest], [<<"{">>]) ->
-    encode_proplist_rev(Rest, [{0, Key}, <<":">>, encode_rev(Val), <<"{">>]);
+    encode_proplist_rev(Rest, [encode_rev(Val), <<":">>, {0, Key}, <<"{">>]);
 encode_proplist_rev([{Key,Val} | Rest], Acc) ->
-    encode_proplist_rev(Rest, [{0, Key}, <<":">>, encode_rev(Val), <<",">> | Acc]).
+    encode_proplist_rev(Rest, [encode_rev(Val), <<":">>, {0, Key},  <<",">> | Acc]).
 
 
 
