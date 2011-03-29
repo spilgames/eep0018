@@ -29,7 +29,7 @@ decode(IoList) ->
 encode(EJson) ->
     try
         RevList = encode_rev(EJson),
-        final_encode(lists:reverse(lists:flatten([RevList])))
+        {ok, final_encode(lists:reverse(lists:flatten([RevList])))}
     catch throw:Error ->
         Error
     end.
