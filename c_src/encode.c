@@ -153,16 +153,16 @@ final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     }
 done:
     if (ctx.error == NOMEM) {
-        enif_release_binary(&ctx.bin);
+        enif_release_binary_compat(env, &ctx.bin);
         return no_mem_error(env);
     } else if (ctx.error == BADARG) {
-        enif_release_binary(&ctx.bin);
+        enif_release_binary_compat(env, &ctx.bin);
         return enif_make_badarg(env);
     }
     
     // Resize the binary to our exact final size
-    if(!enif_realloc_binary(&(ctx.bin), ctx.fill_offset)) {
-        enif_release_binary(&ctx.bin);
+    if(!enif_realloc_binary_compat(env, &(ctx.bin), ctx.fill_offset)) {
+        enif_release_binary_compat(env, &ctx.bin);
         return no_mem_error(env);
     }
     // make the binary term which transfers ownership
