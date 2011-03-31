@@ -48,6 +48,8 @@ encode_rev(I) when is_integer(I) ->
     list_to_binary(integer_to_list(I));
 encode_rev(S) when is_binary(S) ->
     {0, S};
+encode_rev(S) when is_atom(S) ->
+    {0, list_to_binary(atom_to_list(S))};
 encode_rev(F) when is_float(F) ->
     {1, F};
 encode_rev({Props}) when is_list(Props) ->
@@ -69,9 +71,16 @@ encode_array_rev([Val | Rest], Acc) ->
 encode_proplist_rev([], Acc) ->
     [<<"}">> | Acc];
 encode_proplist_rev([{Key,Val} | Rest], [<<"{">>]) ->
-    encode_proplist_rev(Rest, [encode_rev(Val), <<":">>, {0, Key}, <<"{">>]);
+    encode_proplist_rev(
+        Rest, [encode_rev(Val), <<":">>, {0, as_binary(Key)}, <<"{">>]);
 encode_proplist_rev([{Key,Val} | Rest], Acc) ->
-    encode_proplist_rev(Rest, [encode_rev(Val), <<":">>, {0, Key},  <<",">> | Acc]).
+    encode_proplist_rev(
+        Rest, [encode_rev(Val), <<":">>, {0, as_binary(Key)}, <<",">> | Acc]).
+
+as_binary(B) when is_binary(B) ->
+    B;
+as_binary(A) when is_atom(A) ->
+    list_to_binary(atom_to_list(A)).
 
 
 
