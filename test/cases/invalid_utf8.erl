@@ -1,1 +1,1 @@
-{error,{11,invalid_utf8}}.
+{error,{11,"lexical error: invalid bytes in UTF8 string.\n"}}.

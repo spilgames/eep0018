@@ -1,1 +1,1 @@
-{error,{97,invalid_string}}.
+{error,{97,"lexical error: invalid string in json text.\n"}}.

@@ -1,1 +1,1 @@
-{error,{62,invalid_escaped_char}}.
+{error,{62,"lexical error: inside a string, '\\' occurs before a character which it may not.\n"}}.

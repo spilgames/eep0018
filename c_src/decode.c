@@ -18,62 +18,28 @@ typedef struct {
 #define CONTINUE 1
 #define CANCEL 0
 
-static const char* LEX_ERRORS[] =
-{
-    "ok",
-    "invalid_utf8",
-    "invalid_escaped_char",
-    "invalid_json_char",
-    "invalid_hex_char",
-    "invalid_char",
-    "invalid_string",
-    "missing_integer_after_decimal",
-    "missing_integer_after_exponent",
-    "missing_integer_after_minus",
-    "unallowed_comment"
-};
-
-static const char* PARSE_ERRORS[] =
-{
-    "ok",
-    "client_cancelled",
-    "integer_overflow",
-    "numeric_overflow",
-    "invalid_token",
-    "internal_invalid_token",
-    "key_must_be_string",
-    "pair_missing_colon",
-    "bad_token_after_map_value",
-    "bad_token_after_array_value"
-};
-
 
 static ERL_NIF_TERM
 make_error(yajl_handle handle, ErlNifEnv* env)
 {
-    ERL_NIF_TERM atom;
+    char* yajlError = (char*) yajl_get_error(handle, 0, NULL, 0);
+    ERL_NIF_TERM errMsg;
 
-    yajl_parser_error pe = handle->parserError;
-    yajl_lex_error le = yajl_lex_get_error(handle->lexer);
-
-    if(le != yajl_lex_e_ok)
+    if(yajlError != NULL)
     {
-        atom = enif_make_atom(env, LEX_ERRORS[le]);
-    }
-    else if(pe != yajl_parser_e_ok)
-    {
-        atom = enif_make_atom(env, PARSE_ERRORS[pe]);
+        errMsg = enif_make_string(env, yajlError, ERL_NIF_LATIN1);
+        yajl_free_error(handle, (unsigned char*) yajlError);
     }
     else
     {
-        atom = enif_make_atom(env, "unknown");
+        errMsg = enif_make_string(env, "unknown parse error", ERL_NIF_LATIN1);
     }
 
     return enif_make_tuple(env, 2,
         enif_make_atom(env, "error"),
         enif_make_tuple(env, 2,
             enif_make_uint(env, handle->bytesConsumed),
-            atom
+            errMsg
         )
     );
 }
