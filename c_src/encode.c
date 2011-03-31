@@ -23,7 +23,7 @@ static int
 ensure_buffer(void* vctx, unsigned int len) {
     encode_ctx* ctx = (encode_ctx*)vctx;
     if ((ctx->bin.size - ctx->fill_offset) < len) {
-        if(!enif_realloc_binary(&(ctx->bin), (ctx->bin.size * 2) + len)) {
+        if(!enif_realloc_binary_compat(ctx->env, &(ctx->bin), (ctx->bin.size * 2) + len)) {
             return NOMEM;
         }
     }
@@ -84,28 +84,23 @@ final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     ctx.fill_offset = 0;
     ctx.error = 0;
     
-    if (!enif_alloc_binary(100, &ctx.bin)) {
+    if (!enif_alloc_binary_compat(env, 100, &ctx.bin)) {
             return no_mem_error(env);
     }
     
     while(enif_get_list_cell(env, head, &term, &head)) {
         ErlNifBinary termbin;
-        
+        const ERL_NIF_TERM* array;
+        int arity;
+        int code;
+
         // We scan the list, looking for things to write into the binary, or
         // encode and then write into the binary. We encode values that are
         // tuples tagged with a type and a value: {Type, Value} where Type
         // is a an Integer and Value is what is to be encoded
-        
-        if (enif_is_tuple(env, term)) {
+
+        if (enif_get_tuple(env, term, &arity, &array)) {
             // It's a tuple to encode and copy
-            const ERL_NIF_TERM* array;
-            int arity;
-            int code;
-            if (!enif_get_tuple(env, term, &arity, &array)) {
-                // shouldn't be possible to get here.
-                ctx.error = BADARG;
-                goto done;
-            }
             if (arity != 2 || !enif_get_int(env, array[0], &code)) {
                 // not arity 2 or the first element isn't an int
                 ctx.error = BADARG;
