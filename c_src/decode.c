@@ -104,13 +104,13 @@ static int
 decode_number(void * ctx, const char * numberVal, unsigned int numberLen)
 {
     // scan in the input to see if it's a float or int
-    
+
     int numberType = 0; // 0 means integer, 1 means float
     unsigned int i;
-    ErlNifBinary bin; 
+    ErlNifBinary bin;
     int missingDot = 1;
     unsigned int expPos;
-    
+
     for(i=0; i<numberLen; i++) {
         switch (numberVal[i]) {
         case '.':
@@ -244,7 +244,7 @@ check_rest(unsigned char* data, unsigned int size, unsigned int used)
                 return CANCEL;
         }
     }
-    
+
     return CONTINUE;
 }
 
@@ -258,10 +258,10 @@ reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     unsigned int used;
     ErlNifBinary bin;
     ERL_NIF_TERM ret;
-    
+
     ctx.env = env;
     ctx.head = enif_make_list_from_array(env, NULL, 0);
-    
+
     if(!enif_inspect_iolist_as_binary(env, argv[0], &bin))
     {
         ret = enif_make_badarg(env);
@@ -270,7 +270,7 @@ reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
     status = yajl_parse(handle, bin.data, bin.size);
     used = handle->bytesConsumed;
-    
+
     // Parsing something like "2.0" (without quotes) will
     // cause a spurious semi-error. We add the extra size
     // check so that "2008-20-10" doesn't pass.
