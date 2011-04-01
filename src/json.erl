@@ -79,6 +79,8 @@ encode_proplist_rev([{Key,Val} | Rest], Acc) ->
 
 as_binary(B) when is_binary(B) ->
     B;
+as_binary(B) when is_list(B) ->
+    list_to_binary(B);
 as_binary(A) when is_atom(A) ->
     list_to_binary(atom_to_list(A)).
 
