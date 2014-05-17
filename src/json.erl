@@ -2,6 +2,59 @@
 -export([encode/1, decode/1, fuzz/0, fuzz/1]).
 -on_load(init/0).
 
+
+%% specs borrowed from https://github.com/hio/erlang-json
+%% Do note that Dialyzer is unable to verify these specs
+%% because key functions are implemented in a NIF which
+%% is signalled to Dialyzer with nif_error; this has the
+%% effect that Dialyzer accepts (but doesnt check) the
+%% supplied specs.
+-export_type([value/0]).
+
+-type value() :: json_primary()
+               | json_object_t([{key(), value()}])
+               | json_array_t(value()) .
+%% any type of json value.
+
+-type json_string() :: unicode:unicode_binary().
+%% json string value is represented erlang binary term.
+
+-type json_number() :: integer() | float().
+%% json number value is represented erlang integer or float term.
+-type json_primary() :: json_string()
+                      | json_number()
+                      | boolean()
+                      | null .
+%% non-structured values.
+
+-type key() :: json_string() | atom().
+%% key of object value. key() is mostly binary(), but it may be in atom() depended on key_decode option.
+
+-type json_object_t(Pairs) :: {Pairs}.
+%% json object value is represented in erlang tuple which contains single proplist style value.
+
+%%-type json_object() :: json_object_t([{key(),value()}]).
+%% json object.
+
+-type json_array_t(T) :: [T].
+%% json array value is represented in erlang array term.
+
+%%-type json_array() :: json_array_t(value()).
+%% json array value is represented in erlang array term.
+
+-type text() :: unicode:chardata().
+%% Json encoded text represented in erlang chardata term.
+%% @see binary_text()
+
+-type binary_text() :: unicode:unicode_binary().
+%% Json encoded text represented in erlang binary term.
+%% @see text()
+
+-type decode_error() :: term().
+%% reason for decode() error.
+
+-type encode_error() :: term().
+%% reason for encode() error.
 init() ->
     SoName = case code:priv_dir(json) of
         {error, bad_name} ->
@@ -16,6 +69,7 @@ init() ->
     end,
     erlang:load_nif(SoName, 0).
 
+-spec decode(text()) -> {ok, value()} | {error, decode_error()}.
 decode(IoList) ->
     case reverse_tokens(IoList) of
     {ok, ReverseTokens} ->
@@ -25,7 +79,7 @@ decode(IoList) ->
         Error
     end.
 
-
+-spec encode(value()) -> {ok, binary_text()} | {error, encode_error()}.
 encode(EJson) ->
     try
         RevList = encode_rev(EJson),
@@ -119,7 +173,8 @@ fuzz(Chooser) ->
     json_fuzz:fuzz(Chooser).
 
 not_loaded(Line) ->
-    exit({json_not_loaded, module, ?MODULE, line, Line}).
+    % nif_error ensures that Dialyzer doesn't report "no local return" errors
+    erlang:nif_error({json_not_loaded, module, ?MODULE, line, Line}).
 
 reverse_tokens(_) ->
     not_loaded(?LINE).
